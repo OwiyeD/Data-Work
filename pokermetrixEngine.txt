@@ -1,0 +1,93 @@
+import json
+import urllib.parse
+import engine
+import boto3
+import email
+import os
+from datetime import datetime
+import re
+import pandas as pd
+
+
+print('Loading function')
+
+'''s3 = boto3.client('s3')
+
+
+
+def lambda_handler(event, context):
+    #print("Received event: " + json.dumps(event, indent=2))
+
+    # Get the object from the event and show its content type
+    bucket = event['Records'][0]['s3']['bucket']['name']
+    key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+    try:
+        response = s3.get_object(Bucket=bucket, Key=key)
+        print("CONTENT TYPE: " + response['ContentType'])
+        return response['ContentType']
+    except Exception as e:
+        print(e)
+        print('Error getting object {} from bucket {}. Make sure they exist and your bucket is in the same region as this function.'.format(key, bucket))
+        raise e'''
+       
+
+def get_timestamp():
+    current = datetime.now()
+    return(str(current.year) + '-' + str(current.month) + '-' + str(current.day) + '-' + str(current.hour) + '-' + str(current.minute) + '-' + str(current.second))
+    
+def lambda_handler(event, context):
+    # Get current timestamp
+    timestamp = get_timestamp()
+    
+    # Initiate boto3 client
+    s3 = boto3.client('s3')
+    
+    # Get s3 object contents based on bucket name and object key; in bytes and convert to string
+    #data = s3.get_object(Bucket=event['Records'][0]['s3']['bucket']['name'], Key=event['Records'][0]['s3']['object']['key'])
+    #data = s3.get_object(Bucket=event['query']['Records'][0]['s3']['bucket']['name'], Key=event['query']['Records'][0]['s3']['object']['key'])
+    #data = s3.get_object(Bucket=event['query']['Records'][0]['s3']['bucket']['name'], Key=event['query']['Records'][0]['s3']['object']['key'])
+    bucket = event['Records'][0]['s3']['bucket']['name']
+    key = urllib.parse.unquote_plus(event['Records'][0]['s3']['object']['key'], encoding='utf-8')
+    data = s3.get_object(Bucket=bucket, Key=key)
+    contents = data['Body'].read().decode("utf-8")
+    
+    # Given the s3 object content is the ses email, get the message content and attachment using email package
+    msg = email.message_from_string(contents)
+    attachment = msg.get_payload()[1]
+    fromAddress = msg['from']
+    regex = "\\<(.*?)\\>"
+    fromAddress = re.findall(regex, fromAddress)[0]
+
+    # Write the attachment to a temp location
+    open('/tmp/attach.csv', 'wb').write(attachment.get_payload(decode=True))
+    
+    
+    # Upload the file at the temp location to destination s3 bucket and append timestamp to the filename
+    # Destination S3 bucket is hard coded to 'legacy-applications-email-attachment'. This can be configured as a parameter
+    # Extracted attachment is temporarily saved as attach.csv and then uploaded to attach-upload-<timestamp>.csv
+    #File name
+    try:
+        s3.upload_file('/tmp/attach.csv', 'rawpokermetrix', fromAddress + '/attach-upload-' + timestamp + '.csv')
+        print("Upload Successful")
+    except FileNotFoundError:
+        print("The file was not found")
+        
+    try:
+        response = s3.get_object(Bucket='rawpokermetrix', Key = str(fromAddress + '/attach-upload-' + timestamp + '.csv'))
+        status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    except FileNotFoundError:
+        print("The file was not found")
+    else:
+        print(f"Successful S3 get_object response. Status - {status}")
+        df = pd.read_csv(response.get("Body"), sep=';')
+        engine.main(df)
+
+    
+    # Clean up the file from temp location
+    os.remove('/tmp/attach.csv')
+    response = {
+        'statusCode': 200,
+        'body': json.dumps('SES Email received and processed!')
+    }
+    
+    return response
